@@ -27,14 +27,14 @@ const agentQueue = []; // [{ cardId, workspaceId, agentType }]
 const SPAWN_DEBOUNCE_MS = 1500;
 const spawnTimers = new Map(); // cardId -> timeoutId
 
-function scheduleSpawn(cardId, workspaceId, agentType, emitSSE, modelOverride) {
+function scheduleSpawn(cardId, workspaceId, agentType, emitSSE, modelOverride, skipPermissionsOverride) {
   if (spawnTimers.has(cardId)) {
     clearTimeout(spawnTimers.get(cardId));
     spawnTimers.delete(cardId);
   }
   const tid = setTimeout(() => {
     spawnTimers.delete(cardId);
-    spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride);
+    spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride, skipPermissionsOverride);
   }, SPAWN_DEBOUNCE_MS);
   spawnTimers.set(cardId, tid);
 }
@@ -109,7 +109,7 @@ function dequeueNext(emitSSE) {
     const next = agentQueue.shift();
     if (activeAgents.has(next.cardId)) continue; // already started elsewhere
     emitSSE('agent_dequeued', { cardId: next.cardId });
-    spawnAgent(next.cardId, next.workspaceId, next.agentType, emitSSE);
+    spawnAgent(next.cardId, next.workspaceId, next.agentType, emitSSE, undefined, next.skipPermissionsOverride);
   }
 }
 
@@ -406,7 +406,7 @@ function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model,
   return { child, outStream };
 }
 
-function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
+function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride, skipPermissionsOverride) {
   if (activeAgents.has(cardId)) {
     // Card was moved to a new column while the agent was still running.
     // If the target column is one we auto-spawn for, schedule a respawn
@@ -420,7 +420,7 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
         if (queue.length > 0) {
           process.stderr.write(`[agent] Warning: card ${cardId} already has ${queue.length} pending respawn(s); queuing another (previous targets will run first)\n`);
         }
-        queue.push({ workspaceId, agentType });
+        queue.push({ workspaceId, agentType, skipPermissionsOverride });
         addAgentLog(workspaceId, agentType, 'agent_pending_respawn', `Queued respawn #${queue.length} after current agent exits for card ${cardId}`, cardId);
         emitSSE('agent_pending_respawn', { cardId, agentType });
       }
@@ -432,7 +432,7 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
   // will start it when a running agent finishes.
   if (activeAgents.size >= MAX_CONCURRENT) {
     if (!isQueued(cardId)) {
-      agentQueue.push({ cardId, workspaceId, agentType });
+      agentQueue.push({ cardId, workspaceId, agentType, skipPermissionsOverride });
       addAgentLog(workspaceId, agentType, 'agent_queued', `Queued at capacity (${MAX_CONCURRENT} running) for card ${cardId}`, cardId);
       const queuePos = agentQueue.length;
       addCardNote(cardId, `Agent queued — ${activeAgents.size} agent(s) already running (max ${MAX_CONCURRENT}). Position in queue: ${queuePos}. Starts automatically when a slot frees up.`);
@@ -501,7 +501,13 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
   try { fs.unlinkSync(outputFile); } catch (_) {}
 
   try {
-    const skipPermissions = workspace.skip_permissions === undefined ? true : !!workspace.skip_permissions;
+    // Per-run choice (from the UI's confirm-on-move prompt) takes precedence
+    // over the workspace default. Automatic continuations that have no live
+    // user interaction to ask (queue dequeue, Review-phase respawn) fall back
+    // to the workspace default when no override was captured at queue time.
+    const skipPermissions = skipPermissionsOverride !== undefined
+      ? !!skipPermissionsOverride
+      : (workspace.skip_permissions === undefined ? true : !!workspace.skip_permissions);
     const { child, outStream } = launchAgent(agentType, prompt, outputFile, spawnDir, cardId, modelToUse, skipPermissions);
     const transform = agentType === 'claude-code' ? parseClaudeStreamJson : null;
     const watchInterval = startOutputWatcher(cardId, outputFile, emitSSE, transform);
@@ -649,7 +655,7 @@ function agentDone(cardId, code, emitSSE) {
     const queue = pendingRespawn.get(cardId);
     const pending = queue.shift();
     if (queue.length === 0) pendingRespawn.delete(cardId);
-    if (pending) spawnAgent(cardId, pending.workspaceId, pending.agentType, emitSSE);
+    if (pending) spawnAgent(cardId, pending.workspaceId, pending.agentType, emitSSE, undefined, pending.skipPermissionsOverride);
   }
 }
 

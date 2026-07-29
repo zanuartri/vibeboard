@@ -142,3 +142,116 @@ function vbConfirm(message, opts = {}) {
 function vbPrompt(message, opts = {}) {
   return vbDialog({ message, input: true, confirmText: 'Save', ...opts });
 }
+
+// ── Run-agent confirm ────────────────────────────────────────────────────────
+// Asked every time a card is manually moved to In Progress/Review (or Run is
+// clicked) instead of silently applying a fixed workspace setting, so the
+// unattended/skip-permissions choice is made per task, not once globally.
+// Returns { confirmed, skipPermissions } or null if cancelled.
+function vbConfirmRunAgent(cardTitle, defaultSkipPermissions = true) {
+  return new Promise(resolve => {
+    const prevFocus = document.activeElement;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'vb-dialog-overlay';
+
+    const box = document.createElement('div');
+    box.className = 'vb-dialog';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Start agent');
+
+    const head = document.createElement('div');
+    head.className = 'vb-dialog-head';
+    const h = document.createElement('div');
+    h.className = 'vb-dialog-title';
+    h.textContent = 'Start agent';
+    head.appendChild(h);
+    box.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'vb-dialog-body';
+
+    const m = document.createElement('div');
+    m.className = 'vb-dialog-message';
+    m.textContent = `Run the agent on "${cardTitle}"?`;
+    body.appendChild(m);
+
+    const row = document.createElement('div');
+    row.className = 'toggle-row';
+    const rowText = document.createElement('div');
+    const label = document.createElement('div');
+    label.className = 'toggle-row-label';
+    label.textContent = 'Skip permission prompts';
+    const hint = document.createElement('div');
+    hint.className = 'toggle-row-hint';
+    hint.textContent = 'Run unattended, without asking before each tool use.';
+    rowText.appendChild(label);
+    rowText.appendChild(hint);
+    const toggleLabel = document.createElement('label');
+    toggleLabel.className = 'toggle-switch';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !!defaultSkipPermissions;
+    const track = document.createElement('span');
+    track.className = 'toggle-track';
+    toggleLabel.appendChild(checkbox);
+    toggleLabel.appendChild(track);
+    row.appendChild(rowText);
+    row.appendChild(toggleLabel);
+    body.appendChild(row);
+
+    box.appendChild(body);
+
+    const footer = document.createElement('div');
+    footer.className = 'vb-dialog-footer';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn-ghost';
+    cancelBtn.textContent = 'Cancel';
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'btn-save';
+    confirmBtn.textContent = 'Start';
+    footer.appendChild(cancelBtn);
+    footer.appendChild(confirmBtn);
+    box.appendChild(footer);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+
+    let done = false;
+    function close(result) {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey, true);
+      overlay.classList.remove('open');
+      setTimeout(() => overlay.remove(), 150);
+      if (prevFocus && prevFocus.focus) { try { prevFocus.focus(); } catch (_) {} }
+      resolve(result);
+    }
+
+    const onConfirm = () => close({ confirmed: true, skipPermissions: checkbox.checked });
+    const onCancel = () => close(null);
+
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('mousedown', e => { if (e.target === overlay) onCancel(); });
+
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); return; }
+      if (e.key === 'Enter' && e.target !== checkbox) { e.preventDefault(); onConfirm(); return; }
+      if (e.key === 'Tab') {
+        const focusables = [...box.querySelectorAll('button, input')].filter(el => !el.disabled);
+        if (!focusables.length) return;
+        const first = focusables[0], last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    document.addEventListener('keydown', onKey, true);
+
+    setTimeout(() => confirmBtn.focus(), 40);
+  });
+}

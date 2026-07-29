@@ -224,7 +224,11 @@ module.exports = function registerRoutes(app) {
     if (!card) return res.status(404).json({ error: 'Card not found' });
     if (!card.agent) return res.status(400).json({ error: 'Card has no assigned agent' });
     if (isAgentActive(cardId)) return res.status(409).json({ error: 'Agent already running or queued' });
-    scheduleSpawn(cardId, card.workspace_id, card.agent, emitSSE);
+    // skipPermissions is optional: the UI asks the user on every manual
+    // move-to-In-Progress/Review and forwards their per-run choice here.
+    // Omitted (e.g. programmatic callers) falls back to the workspace default.
+    const { skipPermissions } = req.body || {};
+    scheduleSpawn(cardId, card.workspace_id, card.agent, emitSSE, undefined, skipPermissions);
     res.json({ ok: true });
   });
 

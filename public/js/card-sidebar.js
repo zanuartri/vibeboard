@@ -771,15 +771,28 @@ function updateMoveButtons(card, currentColTitle) {
       if (!sourceCol) return;
       const cardIdx = sourceCol.cards.findIndex(c => c.id === card.id);
       if (cardIdx === -1) return;
+
+      const willSpawnAgent = card.agent && (targetCol.title === 'In Progress' || targetCol.title === 'Review');
+      let runSkipPermissions = true;
+      if (willSpawnAgent) {
+        const choice = await vbConfirmRunAgent(card.title || card.text, board.skip_permissions === undefined ? true : !!board.skip_permissions);
+        if (!choice) return;
+        runSkipPermissions = choice.skipPermissions;
+      }
+
       const [movedCard] = sourceCol.cards.splice(cardIdx, 1);
       tc.cards.push(movedCard);
       renderBoard(board);
       closeCardModal();
       await postBoard();
-      const spawnsAgent = card.agent && (targetCol.title === 'In Progress' || targetCol.title === 'Review');
-      if (spawnsAgent) {
+      if (willSpawnAgent) {
         showToast(`Starting ${AGENT_LABELS[card.agent] || card.agent} on "${card.title || card.text}"`, 4000);
-        try { await fetch(`/api/cards/${card.id}/run`, { method: 'POST' }); }
+        try {
+          await fetch(`/api/cards/${card.id}/run`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ skipPermissions: runSkipPermissions }),
+          });
+        }
         catch (err) { showToast('Failed to start agent: ' + err.message, 3000, 'error'); }
       } else {
         showToast(`Moved to ${targetCol.title}`);
@@ -1346,12 +1359,18 @@ document.getElementById('card-run-agent-btn').addEventListener('click', async fu
     updateRunAgentBtn(col.cards.find(c => c.id === modalCardId));
     return;
   }
+  const cardObj = col.cards.find(c => c.id === modalCardId);
+  const choice = await vbConfirmRunAgent(cardObj?.title || cardObj?.text || '', board.skip_permissions === undefined ? true : !!board.skip_permissions);
+  if (!choice) return;
   this.disabled = true; this.textContent = 'Starting\u2026';
   const toggle = document.getElementById('card-output-toggle');
   const outputPre = document.getElementById('card-output-content');
   outputPre.textContent = '';
   try {
-    const resp = await fetch(`/api/cards/${modalCardId}/run`, { method: 'POST' });
+    const resp = await fetch(`/api/cards/${modalCardId}/run`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skipPermissions: choice.skipPermissions }),
+    });
     if (!resp.ok) {
       let msg = `HTTP ${resp.status}`;
       try { const d = await resp.json(); msg = d.error || msg; } catch(_) { msg = await resp.text().catch(() => msg); }
