@@ -137,7 +137,22 @@ function isSafeModel(model) {
   return true;
 }
 
-function buildShellCmd(agentType, promptFile, model) {
+// Per-agent flag that bypasses tool-use approval prompts. Only applied when
+// the workspace's skip_permissions setting is on (the historical default, to
+// stay backward-compatible with workspaces created before this setting
+// existed). Turning it off means the agent stops and waits on its normal
+// permission prompts, same as running it yourself in a terminal.
+function skipPermissionsFlag(agentType) {
+  switch (agentType) {
+    case 'claude-code': return '--dangerously-skip-permissions';
+    case 'opencode': return '--dangerously-skip-permissions';
+    case 'codex': return '--dangerously-bypass-approvals-and-sandbox';
+    case 'command-code': return '--yolo';
+    default: return '';
+  }
+}
+
+function buildShellCmd(agentType, promptFile, model, skipPermissions = true) {
   const win = process.platform === 'win32';
   let modelFlag = '';
 
@@ -149,23 +164,25 @@ function buildShellCmd(agentType, promptFile, model) {
     process.stderr.write(`Ignoring unsafe model value: ${JSON.stringify(model)}\n`);
   }
 
+  const permFlag = skipPermissions ? ` ${skipPermissionsFlag(agentType)}` : '';
+
   switch (agentType) {
     case 'claude-code':
       return win
-        ? `type "${promptFile}" | claude --print --verbose --dangerously-skip-permissions --effort medium --output-format stream-json${modelFlag}`
-        : `claude --print --verbose --dangerously-skip-permissions --effort medium --output-format stream-json${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | claude --print --verbose${permFlag} --effort medium --output-format stream-json${modelFlag}`
+        : `claude --print --verbose${permFlag} --effort medium --output-format stream-json${modelFlag} < "${promptFile}"`;
     case 'opencode':
       return win
-        ? `type "${promptFile}" | opencode run --dangerously-skip-permissions${modelFlag}`
-        : `opencode run --dangerously-skip-permissions${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | opencode run${permFlag}${modelFlag}`
+        : `opencode run${permFlag}${modelFlag} < "${promptFile}"`;
     case 'codex':
       return win
-        ? `type "${promptFile}" | codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}`
-        : `codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | codex exec${permFlag}${modelFlag}`
+        : `codex exec${permFlag}${modelFlag} < "${promptFile}"`;
     case 'command-code':
       return win
-        ? `type "${promptFile}" | command-code -p --yolo --skip-onboarding --max-turns 60${modelFlag}`
-        : `command-code -p --yolo --skip-onboarding --max-turns 60${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | command-code -p${permFlag} --skip-onboarding --max-turns 60${modelFlag}`
+        : `command-code -p${permFlag} --skip-onboarding --max-turns 60${modelFlag} < "${promptFile}"`;
 
     default:
       return win
@@ -341,7 +358,7 @@ function killProcessTree(child) {
   }
 }
 
-function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model) {
+function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model, skipPermissions = true) {
   const outStream = fs.createWriteStream(outputFile, { flags: 'w' });
 
   // Without an error handler, a write failure (disk full, bad path, etc.)
@@ -354,7 +371,7 @@ function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model)
   const promptFile = path.join(AGENT_IO_DIR, `vb-prompt-${cardId}.txt`);
   fs.writeFileSync(promptFile, prompt, 'utf8');
 
-  const cmd = buildShellCmd(agentType, promptFile, model);
+  const cmd = buildShellCmd(agentType, promptFile, model, skipPermissions);
   const child = spawn(cmd, [], {
     cwd: workspaceDir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: true,
   });
@@ -484,7 +501,8 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
   try { fs.unlinkSync(outputFile); } catch (_) {}
 
   try {
-    const { child, outStream } = launchAgent(agentType, prompt, outputFile, spawnDir, cardId, modelToUse);
+    const skipPermissions = workspace.skip_permissions === undefined ? true : !!workspace.skip_permissions;
+    const { child, outStream } = launchAgent(agentType, prompt, outputFile, spawnDir, cardId, modelToUse, skipPermissions);
     const transform = agentType === 'claude-code' ? parseClaudeStreamJson : null;
     const watchInterval = startOutputWatcher(cardId, outputFile, emitSSE, transform);
 

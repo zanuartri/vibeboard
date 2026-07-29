@@ -107,6 +107,7 @@ function openNewWsModal() {
   wsNewPath.classList.remove('error');
   document.getElementById('ws-new-git-status').style.display = 'none';
   document.getElementById('ws-new-use-worktree').checked = false;
+  document.getElementById('ws-new-skip-permissions').checked = true;
   document.getElementById('ws-new-overlay').classList.add('open');
   wsNewPath.focus();
 }
@@ -134,12 +135,13 @@ document.getElementById('ws-new-submit').addEventListener('click', async () => {
   wsNewPath.classList.remove('error');
   const name = wsNewName.value.trim() || folderName(wsPath) || '';
   const use_worktree = document.getElementById('ws-new-use-worktree').checked ? 1 : 0;
+  const skip_permissions = document.getElementById('ws-new-skip-permissions').checked ? 1 : 0;
   const submitBtn = document.getElementById('ws-new-submit');
   submitBtn.disabled = true; submitBtn.textContent = 'Creating…';
   try {
     const resp = await fetch('/workspaces', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name, path: wsPath, use_worktree }),
+      body: JSON.stringify({ name, path: wsPath, use_worktree, skip_permissions }),
     });
     const ws = await resp.json();
     closeNewWsModal();
@@ -168,6 +170,9 @@ function openWsModal(wsId) {
   document.getElementById('ws-modal-path').value = ws.path || '';
   document.getElementById('ws-modal-desc').value = ws.description || '';
   document.getElementById('ws-modal-use-worktree').checked = !!(ws.use_worktree || (wsId === activeWsId && board.use_worktree));
+  document.getElementById('ws-modal-skip-permissions').checked = ws.skip_permissions !== undefined
+    ? !!ws.skip_permissions
+    : ((wsId === activeWsId && board.skip_permissions !== undefined) ? !!board.skip_permissions : true);
 
   const stats = document.getElementById('ws-modal-stats');
   stats.innerHTML = '';
@@ -288,6 +293,9 @@ function openWsModal(wsId) {
   document.getElementById('ws-modal-path').value = ws.path || '';
   document.getElementById('ws-modal-desc').value = ws.description || '';
   document.getElementById('ws-modal-use-worktree').checked = !!(ws.use_worktree || (wsId === activeWsId && board.use_worktree));
+  document.getElementById('ws-modal-skip-permissions').checked = ws.skip_permissions !== undefined
+    ? !!ws.skip_permissions
+    : ((wsId === activeWsId && board.skip_permissions !== undefined) ? !!board.skip_permissions : true);
 
   const stats = document.getElementById('ws-modal-stats');
   stats.innerHTML = '';
@@ -325,6 +333,7 @@ document.getElementById('ws-modal-save').addEventListener('click', async () => {
   const wsPath = document.getElementById('ws-modal-path').value.trim();
   const description = document.getElementById('ws-modal-desc').value.trim();
   const useWorktree = document.getElementById('ws-modal-use-worktree').checked;
+  const skipPermissions = document.getElementById('ws-modal-skip-permissions').checked;
 
   if (wsPath && !isAbsolutePath(wsPath)) {
     showToast('Path must be absolute (e.g., C:\\Projects\\myapp or /home/user/myapp)');
@@ -334,16 +343,16 @@ document.getElementById('ws-modal-save').addEventListener('click', async () => {
 
   try {
     if (editingWsId === activeWsId) {
-      board.name = name; board.path = wsPath; board.description = description; board.use_worktree = useWorktree ? 1 : 0;
+      board.name = name; board.path = wsPath; board.description = description; board.use_worktree = useWorktree ? 1 : 0; board.skip_permissions = skipPermissions ? 1 : 0;
       await postBoard();
     } else {
       await fetch(`/workspaces/${editingWsId}`, {
         method: 'PATCH', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ name, path: wsPath, description, use_worktree: useWorktree ? 1 : 0 }),
+        body: JSON.stringify({ name, path: wsPath, description, use_worktree: useWorktree ? 1 : 0, skip_permissions: skipPermissions ? 1 : 0 }),
       });
     }
     const ws = workspaces.find(w => w.id === editingWsId);
-    if (ws) { ws.name = name; ws.path = wsPath; ws.description = description; ws.use_worktree = useWorktree ? 1 : 0; }
+    if (ws) { ws.name = name; ws.path = wsPath; ws.description = description; ws.use_worktree = useWorktree ? 1 : 0; ws.skip_permissions = skipPermissions ? 1 : 0; }
     renderWorkspaceList();
   } catch(_){}
   closeWsModal();

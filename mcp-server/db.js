@@ -163,6 +163,9 @@ db.exec(`
     if (!cardCols.includes('has_branch_changes'))     db.prepare('ALTER TABLE cards ADD COLUMN has_branch_changes INTEGER DEFAULT 0').run();
 
     if (!wsCols.includes('use_worktree')) db.prepare('ALTER TABLE workspaces ADD COLUMN use_worktree INTEGER DEFAULT 0').run();
+    // Default 1 preserves existing behavior for workspaces created before this
+    // setting existed (agents ran with permissions skipped unconditionally).
+    if (!wsCols.includes('skip_permissions')) db.prepare('ALTER TABLE workspaces ADD COLUMN skip_permissions INTEGER DEFAULT 1').run();
 
     if (!colCols.includes('wip_limit')) db.prepare('ALTER TABLE columns ADD COLUMN wip_limit INTEGER').run();
 
@@ -180,23 +183,23 @@ function setActiveWorkspaceId(id) {
 }
 
 function listWorkspaces() {
-  return db.prepare('SELECT id, name, path, description, use_worktree FROM workspaces ORDER BY created_at DESC').all();
+  return db.prepare('SELECT id, name, path, description, use_worktree, skip_permissions FROM workspaces ORDER BY created_at DESC').all();
 }
 
 function getWorkspace(id) {
   return db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
 }
 
-function createWorkspace(name, wsPath, description = '', useWorktree = 0) {
+function createWorkspace(name, wsPath, description = '', useWorktree = 0, skipPermissions = 1) {
   const { validateWorkspacePath } = require('./path-guard');
   validateWorkspacePath(wsPath);
   const id = 'ws-' + crypto.randomUUID();
   const now = new Date().toISOString();
 
   db.prepare(`
-    INSERT INTO workspaces (id, name, path, description, use_worktree, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name, wsPath, description, useWorktree ? 1 : 0, now, now);
+    INSERT INTO workspaces (id, name, path, description, use_worktree, skip_permissions, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, name, wsPath, description, useWorktree ? 1 : 0, skipPermissions ? 1 : 0, now, now);
   
   const defaultColumns = [
     { id: 'col-' + crypto.randomUUID(), title: 'Backlog', color: '#6b6860', position: 0 },
@@ -225,6 +228,7 @@ function updateWorkspace(id, updates) {
   }
   if (updates.description !== undefined)  { fields.push('description = ?');  values.push(updates.description); }
   if (updates.use_worktree !== undefined) { fields.push('use_worktree = ?'); values.push(updates.use_worktree ? 1 : 0); }
+  if (updates.skip_permissions !== undefined) { fields.push('skip_permissions = ?'); values.push(updates.skip_permissions ? 1 : 0); }
 
   if (fields.length === 0) return;
   
@@ -315,6 +319,7 @@ function getBoard(workspaceId) {
     path: workspace.path,
     description: workspace.description,
     use_worktree: workspace.use_worktree || 0,
+    skip_permissions: workspace.skip_permissions === undefined ? 1 : (workspace.skip_permissions || 0),
     columns: columnsWithCards,
     agentLog,
   };
@@ -690,7 +695,7 @@ function exportWorkspace(workspaceId) {
   return {
     version: 1,
     exported_at: new Date().toISOString(),
-    workspace: { name: workspace.name, path: workspace.path, description: workspace.description, use_worktree: workspace.use_worktree },
+    workspace: { name: workspace.name, path: workspace.path, description: workspace.description, use_worktree: workspace.use_worktree, skip_permissions: workspace.skip_permissions === undefined ? 1 : workspace.skip_permissions },
     columns: columns.map(col => ({
       title: col.title, color: col.color, position: col.position, wip_limit: col.wip_limit,
       cards: cards.filter(c => c.column_id === col.id).map(c => ({
@@ -708,7 +713,7 @@ function exportWorkspace(workspaceId) {
 
 function importWorkspace(data) {
   if (!data?.workspace || !Array.isArray(data.columns)) throw new Error('Invalid export format');
-  const ws = createWorkspace(data.workspace.name || 'Imported', data.workspace.path || '', data.workspace.description || '', data.workspace.use_worktree || 0);
+  const ws = createWorkspace(data.workspace.name || 'Imported', data.workspace.path || '', data.workspace.description || '', data.workspace.use_worktree || 0, data.workspace.skip_permissions === undefined ? 1 : data.workspace.skip_permissions);
   const existingCols = db.prepare('SELECT * FROM columns WHERE workspace_id = ? ORDER BY position').all(ws.id);
   const colMap = {};
   existingCols.forEach(col => { colMap[col.title] = col.id; });
