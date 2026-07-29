@@ -27,14 +27,14 @@ const agentQueue = []; // [{ cardId, workspaceId, agentType }]
 const SPAWN_DEBOUNCE_MS = 1500;
 const spawnTimers = new Map(); // cardId -> timeoutId
 
-function scheduleSpawn(cardId, workspaceId, agentType, emitSSE, modelOverride) {
+function scheduleSpawn(cardId, workspaceId, agentType, emitSSE, modelOverride, skipPermissionsOverride) {
   if (spawnTimers.has(cardId)) {
     clearTimeout(spawnTimers.get(cardId));
     spawnTimers.delete(cardId);
   }
   const tid = setTimeout(() => {
     spawnTimers.delete(cardId);
-    spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride);
+    spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride, skipPermissionsOverride);
   }, SPAWN_DEBOUNCE_MS);
   spawnTimers.set(cardId, tid);
 }
@@ -109,7 +109,7 @@ function dequeueNext(emitSSE) {
     const next = agentQueue.shift();
     if (activeAgents.has(next.cardId)) continue; // already started elsewhere
     emitSSE('agent_dequeued', { cardId: next.cardId });
-    spawnAgent(next.cardId, next.workspaceId, next.agentType, emitSSE);
+    spawnAgent(next.cardId, next.workspaceId, next.agentType, emitSSE, undefined, next.skipPermissionsOverride);
   }
 }
 
@@ -137,7 +137,22 @@ function isSafeModel(model) {
   return true;
 }
 
-function buildShellCmd(agentType, promptFile, model) {
+// Per-agent flag that bypasses tool-use approval prompts. Only applied when
+// the workspace's skip_permissions setting is on (the historical default, to
+// stay backward-compatible with workspaces created before this setting
+// existed). Turning it off means the agent stops and waits on its normal
+// permission prompts, same as running it yourself in a terminal.
+function skipPermissionsFlag(agentType) {
+  switch (agentType) {
+    case 'claude-code': return '--dangerously-skip-permissions';
+    case 'opencode': return '--dangerously-skip-permissions';
+    case 'codex': return '--dangerously-bypass-approvals-and-sandbox';
+    case 'command-code': return '--yolo';
+    default: return '';
+  }
+}
+
+function buildShellCmd(agentType, promptFile, model, skipPermissions = true) {
   const win = process.platform === 'win32';
   let modelFlag = '';
 
@@ -149,23 +164,25 @@ function buildShellCmd(agentType, promptFile, model) {
     process.stderr.write(`Ignoring unsafe model value: ${JSON.stringify(model)}\n`);
   }
 
+  const permFlag = skipPermissions ? ` ${skipPermissionsFlag(agentType)}` : '';
+
   switch (agentType) {
     case 'claude-code':
       return win
-        ? `type "${promptFile}" | claude --print --verbose --dangerously-skip-permissions --effort medium --output-format stream-json${modelFlag}`
-        : `claude --print --verbose --dangerously-skip-permissions --effort medium --output-format stream-json${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | claude --print --verbose${permFlag} --effort medium --output-format stream-json${modelFlag}`
+        : `claude --print --verbose${permFlag} --effort medium --output-format stream-json${modelFlag} < "${promptFile}"`;
     case 'opencode':
       return win
-        ? `type "${promptFile}" | opencode run --dangerously-skip-permissions${modelFlag}`
-        : `opencode run --dangerously-skip-permissions${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | opencode run${permFlag}${modelFlag}`
+        : `opencode run${permFlag}${modelFlag} < "${promptFile}"`;
     case 'codex':
       return win
-        ? `type "${promptFile}" | codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}`
-        : `codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | codex exec${permFlag}${modelFlag}`
+        : `codex exec${permFlag}${modelFlag} < "${promptFile}"`;
     case 'command-code':
       return win
-        ? `type "${promptFile}" | command-code -p --yolo --skip-onboarding --max-turns 60${modelFlag}`
-        : `command-code -p --yolo --skip-onboarding --max-turns 60${modelFlag} < "${promptFile}"`;
+        ? `type "${promptFile}" | command-code -p${permFlag} --skip-onboarding --max-turns 60${modelFlag}`
+        : `command-code -p${permFlag} --skip-onboarding --max-turns 60${modelFlag} < "${promptFile}"`;
 
     default:
       return win
@@ -341,7 +358,7 @@ function killProcessTree(child) {
   }
 }
 
-function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model) {
+function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model, skipPermissions = true) {
   const outStream = fs.createWriteStream(outputFile, { flags: 'w' });
 
   // Without an error handler, a write failure (disk full, bad path, etc.)
@@ -354,7 +371,7 @@ function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model)
   const promptFile = path.join(AGENT_IO_DIR, `vb-prompt-${cardId}.txt`);
   fs.writeFileSync(promptFile, prompt, 'utf8');
 
-  const cmd = buildShellCmd(agentType, promptFile, model);
+  const cmd = buildShellCmd(agentType, promptFile, model, skipPermissions);
   const child = spawn(cmd, [], {
     cwd: workspaceDir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: true,
   });
@@ -389,7 +406,7 @@ function launchAgent(agentType, prompt, outputFile, workspaceDir, cardId, model)
   return { child, outStream };
 }
 
-function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
+function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride, skipPermissionsOverride) {
   if (activeAgents.has(cardId)) {
     // Card was moved to a new column while the agent was still running.
     // If the target column is one we auto-spawn for, schedule a respawn
@@ -403,7 +420,7 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
         if (queue.length > 0) {
           process.stderr.write(`[agent] Warning: card ${cardId} already has ${queue.length} pending respawn(s); queuing another (previous targets will run first)\n`);
         }
-        queue.push({ workspaceId, agentType });
+        queue.push({ workspaceId, agentType, skipPermissionsOverride });
         addAgentLog(workspaceId, agentType, 'agent_pending_respawn', `Queued respawn #${queue.length} after current agent exits for card ${cardId}`, cardId);
         emitSSE('agent_pending_respawn', { cardId, agentType });
       }
@@ -415,7 +432,7 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
   // will start it when a running agent finishes.
   if (activeAgents.size >= MAX_CONCURRENT) {
     if (!isQueued(cardId)) {
-      agentQueue.push({ cardId, workspaceId, agentType });
+      agentQueue.push({ cardId, workspaceId, agentType, skipPermissionsOverride });
       addAgentLog(workspaceId, agentType, 'agent_queued', `Queued at capacity (${MAX_CONCURRENT} running) for card ${cardId}`, cardId);
       const queuePos = agentQueue.length;
       addCardNote(cardId, `Agent queued — ${activeAgents.size} agent(s) already running (max ${MAX_CONCURRENT}). Position in queue: ${queuePos}. Starts automatically when a slot frees up.`);
@@ -484,7 +501,14 @@ function spawnAgent(cardId, workspaceId, agentType, emitSSE, modelOverride) {
   try { fs.unlinkSync(outputFile); } catch (_) {}
 
   try {
-    const { child, outStream } = launchAgent(agentType, prompt, outputFile, spawnDir, cardId, modelToUse);
+    // Per-run choice (from the UI's confirm-on-move prompt) takes precedence
+    // over the workspace default. Automatic continuations that have no live
+    // user interaction to ask (queue dequeue, Review-phase respawn) fall back
+    // to the workspace default when no override was captured at queue time.
+    const skipPermissions = skipPermissionsOverride !== undefined
+      ? !!skipPermissionsOverride
+      : (workspace.skip_permissions === undefined ? true : !!workspace.skip_permissions);
+    const { child, outStream } = launchAgent(agentType, prompt, outputFile, spawnDir, cardId, modelToUse, skipPermissions);
     const transform = agentType === 'claude-code' ? parseClaudeStreamJson : null;
     const watchInterval = startOutputWatcher(cardId, outputFile, emitSSE, transform);
 
@@ -631,7 +655,7 @@ function agentDone(cardId, code, emitSSE) {
     const queue = pendingRespawn.get(cardId);
     const pending = queue.shift();
     if (queue.length === 0) pendingRespawn.delete(cardId);
-    if (pending) spawnAgent(cardId, pending.workspaceId, pending.agentType, emitSSE);
+    if (pending) spawnAgent(cardId, pending.workspaceId, pending.agentType, emitSSE, undefined, pending.skipPermissionsOverride);
   }
 }
 

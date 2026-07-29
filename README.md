@@ -108,6 +108,11 @@ cd vibeboard && npm install && npm start
 
 - ⚡ **Auto-spawn agents** - moving a card to In Progress launches its assigned
   agent in your project directory. No copy-pasting prompts.
+- 🛂 **Per-task permission choice** - every manual move to In Progress/Review
+  (drag, sidebar, or Run agent) asks whether to skip permission prompts for
+  that run, pre-filled from the workspace default. Turn it off to have the
+  agent stop and wait on its normal tool-use approvals instead of running
+  fully unattended.
 - 🔄 **Bidirectional MCP** - you and the agent control the same board in real
   time. Agents read state, post progress, move cards, and mark work done.
 - 🧵 **Git worktree isolation** - each agent works on its own branch; review the

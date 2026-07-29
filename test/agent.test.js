@@ -64,6 +64,23 @@ test('buildShellCmd omits --model when no model given', () => {
   assert.ok(cmd.includes('--dangerously-skip-permissions'));
 });
 
+test('buildShellCmd defaults to skipping permissions when the flag is omitted', () => {
+  assert.ok(buildShellCmd('claude-code', '/tmp/prompt.txt').includes('--dangerously-skip-permissions'));
+  assert.ok(buildShellCmd('opencode', '/tmp/prompt.txt').includes('--dangerously-skip-permissions'));
+  assert.ok(buildShellCmd('codex', '/tmp/prompt.txt').includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(buildShellCmd('command-code', '/tmp/prompt.txt').includes('--yolo'));
+});
+
+test('buildShellCmd drops the skip-permissions flag when explicitly disabled', () => {
+  const pf = '/tmp/prompt.txt';
+  assert.ok(!buildShellCmd('claude-code', pf, null, false).includes('--dangerously-skip-permissions'));
+  assert.ok(!buildShellCmd('opencode', pf, null, false).includes('--dangerously-skip-permissions'));
+  assert.ok(!buildShellCmd('codex', pf, null, false).includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(!buildShellCmd('command-code', pf, null, false).includes('--yolo'));
+  // The prompt file and command should still be present — only the permission flag is dropped.
+  assert.ok(buildShellCmd('claude-code', pf, null, false).includes(pf));
+});
+
 // ── parseUsage ────────────────────────────────────────────────────────────────
 
 test('parseUsage extracts a labelled cost and token count', () => {

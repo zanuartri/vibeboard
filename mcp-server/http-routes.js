@@ -34,9 +34,9 @@ module.exports = function registerRoutes(app) {
   });
 
   app.post('/workspaces', (req, res) => {
-    const { name = '', path: wsPath = '', description = '', use_worktree = 0 } = req.body;
+    const { name = '', path: wsPath = '', description = '', use_worktree = 0, skip_permissions = 1 } = req.body;
     let ws;
-    try { ws = db.createWorkspace(name, wsPath, description, use_worktree); }
+    try { ws = db.createWorkspace(name, wsPath, description, use_worktree, skip_permissions); }
     catch (err) { return res.status(400).json({ error: err.message }); }
     if (!db.getActiveWorkspaceId()) {
       db.setActiveWorkspaceId(ws.id);
@@ -224,7 +224,11 @@ module.exports = function registerRoutes(app) {
     if (!card) return res.status(404).json({ error: 'Card not found' });
     if (!card.agent) return res.status(400).json({ error: 'Card has no assigned agent' });
     if (isAgentActive(cardId)) return res.status(409).json({ error: 'Agent already running or queued' });
-    scheduleSpawn(cardId, card.workspace_id, card.agent, emitSSE);
+    // skipPermissions is optional: the UI asks the user on every manual
+    // move-to-In-Progress/Review and forwards their per-run choice here.
+    // Omitted (e.g. programmatic callers) falls back to the workspace default.
+    const { skipPermissions } = req.body || {};
+    scheduleSpawn(cardId, card.workspace_id, card.agent, emitSSE, undefined, skipPermissions);
     res.json({ ok: true });
   });
 
@@ -354,9 +358,9 @@ module.exports = function registerRoutes(app) {
       }
     }
 
-    if (body.name !== undefined || body.path !== undefined || body.description !== undefined || body.use_worktree !== undefined) {
+    if (body.name !== undefined || body.path !== undefined || body.description !== undefined || body.use_worktree !== undefined || body.skip_permissions !== undefined) {
       try {
-        db.updateWorkspace(activeId, { name: body.name, path: body.path, description: body.description, use_worktree: body.use_worktree });
+        db.updateWorkspace(activeId, { name: body.name, path: body.path, description: body.description, use_worktree: body.use_worktree, skip_permissions: body.skip_permissions });
       } catch (err) { return res.status(400).json({ error: err.message }); }
     }
     if (Array.isArray(body.columns)) {

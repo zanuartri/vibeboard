@@ -231,6 +231,14 @@ function buildColumn(col) {
       }
     }
 
+    const willSpawnAgent = sCol.cards[idx].agent && movingColumns && (tCol.title === 'In Progress' || tCol.title === 'Review');
+    let runSkipPermissions = true;
+    if (willSpawnAgent) {
+      const choice = await vbConfirmRunAgent(sCol.cards[idx].title, board.skip_permissions === undefined ? true : !!board.skip_permissions);
+      if (!choice) { draggingCard = null; draggingFromCol = null; return; }
+      runSkipPermissions = choice.skipPermissions;
+    }
+
     const [card] = sCol.cards.splice(idx, 1);
     const over = e.target.closest('.card');
     if (over?.dataset.cardId) {
@@ -239,7 +247,7 @@ function buildColumn(col) {
     } else { tCol.cards.push(card); }
     draggingCard = null; draggingFromCol = null;
 
-    const spawnsAgent = card.agent && sCol.id !== tCol.id && (tCol.title === 'In Progress' || tCol.title === 'Review');
+    const spawnsAgent = willSpawnAgent;
     if (spawnsAgent) {
       const agentStatus = mcpStatusCache?.agents?.[card.agent];
       if (agentStatus?.installed && !agentStatus?.configured) {
@@ -252,7 +260,10 @@ function buildColumn(col) {
     renderBoard(board);
     await postBoard();
     if (spawnsAgent) {
-      fetch(`/api/cards/${card.id}/run`, { method: 'POST' }).catch(() => {});
+      fetch(`/api/cards/${card.id}/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipPermissions: runSkipPermissions }),
+      }).catch(() => {});
     }
   });
 
